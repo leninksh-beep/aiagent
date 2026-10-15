@@ -1,0 +1,68 @@
+import argparse
+import os
+from dotenv import load_dotenv
+from openai import OpenAI
+from call_function import available_functions, call_function
+from prompts import system_prompt
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Chatbot")
+    parser.add_argument("user_prompt", type=str, help="User prompt")
+    parser.add_argument(
+        "--verbose", action="store_true", help="Enable verbose output"
+    )
+    args = parser.parse_args()
+
+    load_dotenv()
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY is not set in the .env file")
+
+    client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=api_key,
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": args.user_prompt},
+    ]
+    # Step 1: Wrap model calls and tool handling inside a loop (max 20 iterations)
+    for _ in range(20):
+        response = client.chat.completions.create(
+            model="openrouter/free",
+            messages=messages,
+            tools=available_functions,
+        )
+
+        if response.usage is None:
+            raise RuntimeError("API request failed: response.usage is missing.")
+
+        if args.verbose:
+            print(f"User prompt: {args.user_prompt}")
+            print(f"Prompt tokens: {response.usage.prompt_tokens}")
+            print(f"Response tokens: {response.usage.completion_tokens}")
+
+        message = response.choices[0].message
+        messages.append(message)  #  Append assistant message to history
+        if message.tool_calls:
+            for tool_call in message.tool_calls:
+                result_message = call_function(tool_call, verbose=args.verbose)
+
+                # Raise exception if content is missing or empty
+                if not result_message.get("content"):
+                    raise RuntimeError("Function execution returned empty content.")
+
+                if args.verbose:
+                    print(f"-> {result_message['content']}")
+                # Append the tool result message to conversation history
+                messages.append(result_message)
+        else:
+            print(message.content)
+            break  # Exit the agent loop once the final answer is delivered
+
+
+if __name__ == "__main__":
+    main()
